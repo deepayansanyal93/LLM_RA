@@ -9,7 +9,7 @@ use (e.g. proximity-based linking, layout analysis).
 from pathlib import Path
 from typing import Any
 
-import fitz  # PyMuPDF
+import pymupdf
 
 from server.ingestion.validation import validate_pdf_file
 
@@ -37,7 +37,7 @@ def extract_text_blocks(file_path: str | Path) -> list[dict[str, Any]]:
     validate_pdf_file(file_path)
 
     # Step 2: Open the PDF document (fitz is the PyMuPDF module name)
-    doc = fitz.open(file_path)
+    doc = pymupdf.open(file_path)
 
     blocks: list[dict[str, Any]] = []
 
@@ -52,20 +52,20 @@ def extract_text_blocks(file_path: str | Path) -> list[dict[str, Any]]:
             # Step 5: Convert each block to a dict with text, page_number, and bbox
             for block in page_blocks:
                 x0, y0, x1, y1, text, block_no, block_type = block
-
+                text = text.strip() if text else ""
                 # Include only text blocks (type 0); skip image and vector blocks
-                if block_type != 0:
+                if block_type != 0 or len(text) == 0:
                     continue
-
+                
                 block_dict = {
                     "text": text.strip() if text else "",
                     "page_number": page_index + 1,
-                    "bbox": (x0, y0, x1, y1),
+                    # "bbox": (x0, y0, x1, y1),
                 }
                 blocks.append(block_dict)
-        print(f"Blocks: {blocks}")
     finally:
         # Step 6: Always close the document to free resources
         doc.close()
 
     return blocks
+

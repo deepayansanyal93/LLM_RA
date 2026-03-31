@@ -19,6 +19,7 @@ sys.path.insert(0, str(project_root))
 
 from server.ingestion.validation import PDFValidationError, validate_pdf_file
 from server.ingestion.text_extractor import extract_text_blocks
+from server.models.model import extract_embeddings
 
 
 def main() -> None:
@@ -32,7 +33,12 @@ def main() -> None:
     try:
         validate_pdf_file(file_path)
         print(f"Validation passed: {file_path}")
-        extract_text_blocks(file_path)
+        blocks = extract_text_blocks(file_path)
+        queries = []
+        for block in blocks:
+            queries.append(block["text"])
+        embeddings = extract_embeddings(queries)
+        print(embeddings.shape)
     except PDFValidationError as e:
         print(f"Validation failed: {e}", file=sys.stderr)
         sys.exit(1)
