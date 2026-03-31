@@ -1,5 +1,8 @@
 {
   "default_model_type": "vllm_local",
+  "default_batch_size": 128,
+  "min_batch_size": 1,
+  "max_batch_size": 512,
   "models": {
     "vllm_local": {
       "embedding_url": "http://localhost:8000/v1",

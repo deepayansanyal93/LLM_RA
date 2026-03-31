@@ -11,14 +11,21 @@ from server.config import resolve_embedding_settings
 def extract_embeddings(
     queries: List[str],
     model_type: str | None = None,
+    batch_size: int | None = None,
 ) -> np.ndarray:
     """
     Embed strings using OpenAI-compatible API settings for the given model_type.
 
     When model_type is None, uses default_model_type from server/config/embedding.json.
+    batch_size: if a valid int in [min_batch_size, max_batch_size], use it as the
+    number of texts per API request; otherwise use settings.default_batch_size.
     """
     settings = resolve_embedding_settings(model_type)
-
+    batch_size = batch_size if \
+        isinstance(batch_size, int) and not isinstance(batch_size, bool) and \
+        settings.min_batch_size <= batch_size <= settings.max_batch_size \
+            else settings.default_batch_size
+    
     client = OpenAI(
         api_key=settings.api_key,
         base_url=settings.base_url,
@@ -37,20 +44,33 @@ def extract_embeddings(
     ret = np.zeros((n, dim))
 
     prefixed = [f"{settings.prefix}{q}" for q in queries] if settings.prefix else list(queries)
-    responses = client.embeddings.create(input=prefixed, model=model)
 
-    if len(responses.data) != n:
-        raise RuntimeError(
-            f"expected {n} embedding rows, got {len(responses.data)}"
-        )
+    if n == 0:
+        return ret
 
-    for i in range(n):
-        vec = np.array(responses.data[i].embedding, dtype=np.float64)
-        if vec.shape[0] != dim:
+    num_chunks = (n + batch_size - 1) // batch_size
+
+    for chunk_index in range(num_chunks):
+        start = chunk_index * batch_size
+        end = min(start + batch_size, n)
+        batch_inputs = prefixed[start:end]
+        responses = client.embeddings.create(input=batch_inputs, model=model)
+        m = end - start
+
+        if len(responses.data) != m:
             raise RuntimeError(
-                f"expected embedding dim {dim}, got {vec.shape[0]} for row {i}"
+                f"expected {m} embedding rows for batch [{start}:{end}), "
+                f"got {len(responses.data)}"
             )
-        ret[i] = vec
+
+        ordered = sorted(responses.data, key=lambda d: d.index)
+        for j in range(m):
+            vec = np.array(ordered[j].embedding, dtype=np.float64)
+            if vec.shape[0] != dim:
+                raise RuntimeError(
+                    f"expected embedding dim {dim}, got {vec.shape[0]} for row {start + j}"
+                )
+            ret[start + j] = vec
 
     return ret
 

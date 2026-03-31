@@ -19,6 +19,9 @@ class EmbeddingSettings:
     embedding_dim: int
     prefix: str
     embedding_model: str | None
+    default_batch_size: int
+    min_batch_size: int
+    max_batch_size: int
 
 
 def _load_raw_config(path: Path | None = None) -> dict[str, Any]:
@@ -38,6 +41,25 @@ def resolve_embedding_settings(
     If model_type is None, uses default_model_type from the config file.
     """
     data = _load_raw_config(config_path)
+    min_bs = data.get("min_batch_size")
+    if not isinstance(min_bs, int) or isinstance(min_bs, bool):
+        raise ValueError("min_batch_size must be an int between 1 and 512")
+
+    max_bs = data.get("max_batch_size")
+    if not isinstance(max_bs, int) or isinstance(max_bs, bool):
+        raise ValueError("max_batch_size must be an int between 1 and 512")
+
+    if min_bs > max_bs:
+        raise ValueError("min_batch_size must be <= max_batch_size")
+
+    bs = data.get("default_batch_size")
+    if not isinstance(bs, int):
+        raise ValueError("default_batch_size must be an int")
+    if not (min_bs <= bs <= max_bs):
+        raise ValueError(
+            "default_batch_size must be between min_batch_size and max_batch_size"
+        )
+
     default_type = data.get("default_model_type")
     if not default_type or not isinstance(default_type, str):
         raise ValueError("embedding config must define a non-empty default_model_type")
@@ -80,4 +102,7 @@ def resolve_embedding_settings(
         embedding_dim=dim,
         prefix=prefix,
         embedding_model=emb_model,
+        default_batch_size=bs,
+        min_batch_size=min_bs,
+        max_batch_size=max_bs,
     )
