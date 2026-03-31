@@ -19,7 +19,7 @@ sys.path.insert(0, str(project_root))
 
 from server.ingestion.validation import PDFValidationError, validate_pdf_file
 from server.ingestion.text_extractor import extract_text_blocks
-from server.models.model import extract_embeddings
+from server.embeddings.embeddings import extract_embeddings
 
 
 def main() -> None:
