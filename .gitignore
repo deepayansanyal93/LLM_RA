@@ -1,5 +1,6 @@
 plans/
 test_files/
+logs/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
