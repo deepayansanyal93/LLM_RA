@@ -21,8 +21,10 @@ from pathlib import Path
 project_root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(project_root))
 
-
+from server.logging_config import configure_logging
 from server.ingestion.pipeline import process_file
+
+configure_logging()
 
 def main() -> None:
     """Read file path from argv and run the full ingestion pipeline for that file."""
