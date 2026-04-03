@@ -1,6 +1,12 @@
 {
-  "default_model_type": "vllm_local",
   "models": {
+    "ollama_local": {
+      "embedding_url": "http://localhost:11434/v1",
+      "embedding_api_key": "ollama",
+      "embedding_dim": 1024,
+      "prefix": "",
+      "embedding_model": "mxbai-embed-large"
+    },
     "vllm_local": {
       "embedding_url": "http://localhost:8000/v1",
       "embedding_api_key": "EMPTY",

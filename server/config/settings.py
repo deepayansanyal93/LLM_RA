@@ -27,6 +27,17 @@ def _load_raw_config(path: Path | None = None) -> dict[str, Any]:
         return json.load(f)
 
 
+def _detect_model_type() -> str:
+    import urllib.request
+    for model_type, host in [("ollama_local", "http://localhost:11434"), ("vllm_local", "http://localhost:8000")]:
+        try:
+            urllib.request.urlopen(host, timeout=5)
+            return model_type
+        except Exception:
+            continue
+    raise RuntimeError("No embedding server found. Start Ollama or vLLM first.")
+
+
 def resolve_embedding_settings(
     model_type: str | None = None,
     *,
@@ -39,10 +50,8 @@ def resolve_embedding_settings(
     """
     data = _load_raw_config(config_path)
     default_type = data.get("default_model_type")
-    if not default_type or not isinstance(default_type, str):
-        raise ValueError("embedding config must define a non-empty default_model_type")
-
-    key = model_type if model_type is not None else default_type
+    
+    key = model_type if model_type is not None else _detect_model_type()
     models = data.get("models")
     if not isinstance(models, dict):
         raise ValueError("embedding config must contain a models object")
