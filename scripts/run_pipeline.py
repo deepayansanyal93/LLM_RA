@@ -2,10 +2,10 @@
 CLI script to validate a PDF file.
 
 Usage:
-    python scripts/validate_pdf.py <file_path> [--reset]
+    python scripts/run_pipeline.py <file_path> [--reset]
 
 Example:
-    python scripts/validate_pdf.py /path/to/document.pdf
+    python scripts/run_pipeline.py /path/to/document.pdf
 
 Run from the project root directory.
 """
@@ -21,7 +21,7 @@ sys.path.insert(0, str(project_root))
 
 from server.ingestion.validation import PDFValidationError, validate_pdf_file
 from server.ingestion.text_extractor import extract_text_blocks
-from server.models import Embedder, Retriever
+from server.models import Embedder, Retriever, Generator
 from server.vector_store import VectorStore
 
 
@@ -29,7 +29,7 @@ def main() -> None:
     """Read file path from command line, validate the PDF, and print the result."""
     parser = argparse.ArgumentParser(
         description="Validate a PDF and run the ingestion pipeline.",
-        usage="python scripts/validate_pdf.py <file_path> [--reset]",
+        usage="python scripts/run_pipeline.py <file_path> [--reset]",
     )
     parser.add_argument("file_path", help="Path to the PDF file to process.")                                                           
     parser.add_argument("--reset", action="store_true", help="Clear existing index and docstore before ingesting.")                     
@@ -75,10 +75,19 @@ def main() -> None:
             print(f"Text: {result['text']}")
             print(f"Metadata: {result['metadata']}")
             print()
-        
+
+        # Instantiate the generator and generate a response based on the retrieved documents
+        generator = Generator()
+        response = generator.generate(test_query, results)
+        print(f"Generated response: {response}")
+ 
 
     except PDFValidationError as e:
         print(f"Validation failed: {e}", file=sys.stderr)
+        sys.exit(1)
+    
+    except Exception as e:
+        print(f"An error occurred: {e}", file=sys.stderr)
         sys.exit(1)
 
 
