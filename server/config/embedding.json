@@ -1,15 +1,23 @@
 {
-  "default_model_type": "vllm_local",
   "default_batch_size": 128,
   "min_batch_size": 1,
   "max_batch_size": 512,
   "models": {
     "vllm_local": {
+      "check_url": "http://localhost:8000/v1/models",
       "embedding_url": "http://localhost:8000/v1",
       "embedding_api_key": "EMPTY",
       "embedding_dim": 1024,
       "prefix": "Query:",
       "embedding_model": null
+    },
+    "ollama_local": {
+      "check_url": "http://localhost:11434/v1",
+      "embedding_url": "http://localhost:11434/v1",
+      "embedding_api_key": "ollama",
+      "embedding_dim": 1024,
+      "prefix": "",
+      "embedding_model": "mxbai-embed-large"
     }
   }
 }
