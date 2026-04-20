@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-_CONFIG_PATH = Path(__file__).resolve().parent / "config.json"
+_CONFIG_PATH = Path(__file__).resolve().parent / "embedding.json"
 
 
 @dataclass(frozen=True)
@@ -19,6 +19,9 @@ class EmbeddingSettings:
     embedding_dim: int
     prefix: str
     embedding_model: str | None
+    default_batch_size: int
+    min_batch_size: int
+    max_batch_size: int
 
 
 @dataclass(frozen=True)
@@ -36,76 +39,21 @@ def _load_raw_config(path: Path | None = None) -> dict[str, Any]:
         return json.load(f)
 
 
-def _detect_model_type() -> str:
+def _detect_model_type(models) -> str:
     import urllib.request
-    for model_type, host in [("ollama_local", "http://localhost:11434"), ("vllm_local", "http://localhost:8000")]:
+    possible_models = []
+    for model_name in models:
+        model_url = models[model_name].get("check_url")
+        possible_models.append((model_name, model_url))
+        
+    for model_name, model_url in possible_models:
         try:
-            urllib.request.urlopen(host, timeout=5)
-            return model_type
+            print("model_url:", model_url)
+            urllib.request.urlopen(model_url, timeout=5)
+            return model_name
         except Exception:
             continue
     raise RuntimeError("No embedding server found. Start Ollama or vLLM first.")
-
-
-def _load_profile(model_type: str | None, config_path: Path | None) -> tuple[str, str, dict]:
-    """
-    Resolve model type, load config, and return (key, url, api_key, profile).
-
-    Args:
-        model_type: Explicit model type key, or None to auto-detect.
-        config_path: Optional path to the config file.
-
-    Returns:
-        Tuple of (resolved key, base_url, api_key, full profile dict) as a 4-tuple.
-
-    Raises:
-        ValueError: If the config structure is invalid or the model type is unknown.
-    """
-    data = _load_raw_config(config_path)
-    key = model_type if model_type is not None else _detect_model_type()
-
-    models = data.get("models")
-    if not isinstance(models, dict):
-        raise ValueError("config must contain a models object")
-
-    profile = models.get(key)
-    if not isinstance(profile, dict):
-        raise ValueError(f"unknown model_type: {key!r}")
-
-    try:
-        url = profile["url"]
-        api_key = profile["api_key"]
-    except KeyError as e:
-        raise ValueError(f"profile {key!r} missing key: {e.args[0]}") from e
-
-    if not isinstance(url, str) or not url.strip():
-        raise ValueError(f"url for {key!r} must be a non-empty string")
-    if not isinstance(api_key, str):
-        raise ValueError(f"api_key for {key!r} must be a string")
-
-    return key, url.strip(), api_key, profile
-
-
-def _normalize_model_str(value: Any, field: str, key: str) -> str | None:
-    """
-    Validate and normalise an optional model name string from a profile.
-
-    Args:
-        value: The raw value from the profile dict.
-        field: The field name, used in error messages.
-        key: The model type key, used in error messages.
-
-    Returns:
-        Stripped string, or None if value is None or blank.
-
-    Raises:
-        ValueError: If value is neither a string nor None.
-    """
-    if value is not None and not isinstance(value, str):
-        raise ValueError(f"{field} for {key!r} must be a string or null")
-    if isinstance(value, str) and not value.strip():
-        return None
-    return value
 
 
 def resolve_embedding_settings(
@@ -126,11 +74,42 @@ def resolve_embedding_settings(
     Raises:
         ValueError: If the config is invalid or required fields are missing.
     """
-    key, url, api_key, profile = _load_profile(model_type, config_path)
+    data = _load_raw_config(config_path)
+    min_bs = data.get("min_batch_size")
+    if not isinstance(min_bs, int) or isinstance(min_bs, bool):
+        raise ValueError("min_batch_size must be an int between 1 and 512")
+
+    max_bs = data.get("max_batch_size")
+    if not isinstance(max_bs, int) or isinstance(max_bs, bool):
+        raise ValueError("max_batch_size must be an int between 1 and 512")
+
+    if min_bs > max_bs:
+        raise ValueError("min_batch_size must be <= max_batch_size")
+
+    bs = data.get("default_batch_size")
+    if not isinstance(bs, int):
+        raise ValueError("default_batch_size must be an int")
+    if not (min_bs <= bs <= max_bs):
+        raise ValueError(
+            "default_batch_size must be between min_batch_size and max_batch_size"
+        )
+
+    
+    models = data.get("models")
+    if not isinstance(models, dict):
+        raise ValueError("embedding config must contain a models object")
+    
+    key = model_type if model_type is not None else _detect_model_type(models)
+
+    profile = models.get(key)
+    if not isinstance(profile, dict):
+        raise ValueError(f"unknown embedding model_type: {key!r}")
 
     try:
         dim = int(profile["embedding_dim"])
         prefix = profile["prefix"] if profile["prefix"] is not None else ""
+        url = profile["embedding_url"]
+        api_key = profile["embedding_api_key"]
     except KeyError as e:
         raise ValueError(f"embedding profile {key!r} missing key: {e.args[0]}") from e
 
@@ -139,7 +118,11 @@ def resolve_embedding_settings(
     if dim < 1:
         raise ValueError(f"embedding_dim for {key!r} must be >= 1")
 
-    emb_model = _normalize_model_str(profile.get("embedding_model"), "embedding_model", key)
+    emb_model = profile.get("embedding_model")
+    if emb_model is not None and not isinstance(emb_model, str):
+        raise ValueError(f"embedding_model for {key!r} must be a string or null")
+    if isinstance(emb_model, str) and not emb_model.strip():
+        emb_model = None
 
     return EmbeddingSettings(
         base_url=url,
@@ -147,6 +130,9 @@ def resolve_embedding_settings(
         embedding_dim=dim,
         prefix=prefix,
         embedding_model=emb_model,
+        default_batch_size=bs,
+        min_batch_size=min_bs,
+        max_batch_size=max_bs,
     )
 
 
@@ -168,11 +154,11 @@ def resolve_generator_settings(
     Raises:
         ValueError: If the config is invalid or required fields are missing.
     """
-    key, url, api_key, profile = _load_profile(model_type, config_path)
-    gen_model = _normalize_model_str(profile.get("generation_model"), "generation_model", key)
+    # key, url, api_key, profile = _load_profile(model_type, config_path)
+    # gen_model = profile.get("generation_model")
 
     return GeneratorSettings(
-        base_url=url,
-        api_key=api_key,
-        generation_model=gen_model,
+        base_url="http://localhost:8001/v1",
+        api_key="EMPTY",
+        generation_model=None,
     )

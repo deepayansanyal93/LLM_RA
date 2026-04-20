@@ -10,9 +10,13 @@ from server.config import resolve_embedding_settings
 """Module for embedding text."""
 
 class Embedder:
-    def __init__(self, model_type: str | None = None):
+    def __init__(self, model_type: str | None = None, batch_size: int | None = None):
         self.model_type = model_type
         self.settings = resolve_embedding_settings(self.model_type)
+        self.batch_size = batch_size if \
+            isinstance(batch_size, int) and not isinstance(batch_size, bool) and \
+                self.settings.min_batch_size <= batch_size <= self.settings.max_batch_size \
+                    else self.settings.default_batch_size
 
         self.client = OpenAI(
             api_key=self.settings.api_key,
@@ -29,29 +33,46 @@ class Embedder:
 
         self.dim = self.settings.embedding_dim
 
-    def embed(self, queries: List[str]) -> np.ndarray:
+    def embed(self, queries: List[str], batch_size: int | None = None) -> np.ndarray:
 
         n = len(queries)
-        ret = []
+        
+        dim = self.settings.embedding_dim
+        ret = np.zeros((n, dim))
+        if n == 0:
+            return ret
 
         # Get embeddings from the API. If settings.prefix is set, prepend it to each query before sending to the API.
         prefixed = [f"{self.settings.prefix}{q}" for q in queries] if self.settings.prefix else list(queries)
-        responses = self.client.embeddings.create(input=prefixed, model=self.model)
+        batch_size = batch_size if batch_size and \
+            isinstance(batch_size, int) and not isinstance(batch_size, bool) and \
+                self.settings.min_batch_size <= batch_size <= self.settings.max_batch_size \
+                    else self.batch_size
+        
+        num_chunks = (n + batch_size - 1) // batch_size
+        for chunk_index in range(num_chunks):
+            start = chunk_index * batch_size
+            end = min(start + batch_size, n)
+            batch_inputs = prefixed[start:end]
+            responses = self.client.embeddings.create(input=batch_inputs, model=self.model)
+            m = end - start
 
-        if len(responses.data) != n:
-            raise RuntimeError(
-                f"expected {n} embedding rows, got {len(responses.data)}"
-            )
-
-        for i in range(n):
-            vec = np.array(responses.data[i].embedding, dtype=np.float64)
-            if vec.shape[0] != self.dim:
+            if len(responses.data) != m:
                 raise RuntimeError(
-                    f"expected embedding dim {self.dim}, got {vec.shape[0]} for row {i}"
+                    f"expected {m} embedding rows for batch [{start}:{end}), "
+                    f"got {len(responses.data)}"
                 )
-            ret.append(vec)
 
-        return np.array(ret).reshape(n, self.dim)
+            ordered = sorted(responses.data, key=lambda d: d.index)
+            for j in range(m):
+                vec = np.array(ordered[j].embedding, dtype=np.float64)
+                if vec.shape[0] != dim:
+                    raise RuntimeError(
+                        f"expected embedding dim {dim}, got {vec.shape[0]} for row {start + j}"
+                    )
+                ret[start + j] = vec
+
+        return ret
 
 
 if __name__ == "__main__":

@@ -1,9 +1,15 @@
 """
-Text extraction from PDF files.
+Stage 1 — PDF layout text blocks (PyMuPDF).
 
-Extracts all text blocks from a PDF using PyMuPDF. Each block contains
-text content, page number, and bounding box coordinates for downstream
-use (e.g. proximity-based linking, layout analysis).
+Opens the PDF and collects native text blocks from each page: stripped text,
+page index, and bounding box. This is layout-level extraction, not the final
+shape for LLM / embedding input.
+
+Stage 2 (strings for embeddings) lives in chunks.py — e.g. basic_chunker maps
+blocks to query strings.
+
+Callers must validate the file (e.g. validate_pdf_file in pipeline) before
+extract(); this module does not perform path or PDF header checks.
 """
 
 from pathlib import Path
@@ -11,61 +17,43 @@ from typing import Any
 
 import pymupdf
 
-from server.ingestion.validation import validate_pdf_file
 
+class BasicTextExtractor:
+    """Extract PyMuPDF text blocks from a PDF (stage 1 of text ingestion)."""
 
-def extract_text_blocks(file_path: str | Path) -> list[dict[str, Any]]:
-    """
-    Extract all text blocks from a PDF file.
+    def extract(self, file_path: str | Path) -> list[dict[str, Any]]:
+        """
+        Return all text blocks from the PDF.
 
-    Each block is returned as a dict with:
-    - "text": extracted text content
-    - "page_number": 1-based page index
-    - "bbox": bounding box (x0, y0, x1, y1) for layout analysis
+        Does not validate the path or file; the pipeline does that first.
 
-    Args:
-        file_path: Path to the PDF file.
+        Each block is a dict with:
+        - "text": stripped text content
+        - "page_number": 1-based page index
+        - "bbox": (x0, y0, x1, y1) in PDF coordinates
 
-    Returns:
-        List of text block dicts, one per block across all pages.
+        Raises:
+            pymupdf.PdfError: If the PDF cannot be opened or is corrupted.
+        """
+        doc = pymupdf.open(file_path)
+        blocks: list[dict[str, Any]] = []
 
-    Raises:
-        PDFValidationError: If the file fails validation.
-        pymupdf.PdfError: If the PDF cannot be opened or is corrupted.
-    """
-    # Step 1: Validate the input file before opening
-    validate_pdf_file(file_path)
+        try:
+            for page_index, page in enumerate(doc):
+                page_blocks = page.get_text("blocks")
+                for block in page_blocks:
+                    x0, y0, x1, y1, text, block_no, block_type = block
+                    text = text.strip() if text else ""
+                    if block_type != 0 or len(text) == 0:
+                        continue
+                    blocks.append(
+                        {
+                            "text": text,
+                            "page_number": page_index + 1,
+                            "bbox": (x0, y0, x1, y1),
+                        }
+                    )
+        finally:
+            doc.close()
 
-    # Step 2: Open the PDF document (fitz is the PyMuPDF module name)
-    doc = pymupdf.open(file_path)
-
-    blocks: list[dict[str, Any]] = []
-
-    try:
-        # Step 3: Iterate over all pages
-        for page_index, page in enumerate(doc):
-            # Step 4: Get text blocks for this page
-            # PyMuPDF returns: (x0, y0, x1, y1, "text", block_no, block_type)
-            # block_type: 0=text, 1=image, 3=vector
-            page_blocks = page.get_text("blocks")
-
-            # Step 5: Convert each block to a dict with text, page_number, and bbox
-            for block in page_blocks:
-                x0, y0, x1, y1, text, block_no, block_type = block
-                text = text.strip() if text else ""
-                # Include only text blocks (type 0); skip image and vector blocks
-                if block_type != 0 or len(text) == 0:
-                    continue
-                
-                block_dict = {
-                    "text": text.strip() if text else "",
-                    "page_number": page_index + 1,
-                    # "bbox": (x0, y0, x1, y1),
-                }
-                blocks.append(block_dict)
-    finally:
-        # Step 6: Always close the document to free resources
-        doc.close()
-
-    return blocks
-
+        return blocks
