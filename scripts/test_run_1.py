@@ -16,6 +16,7 @@ Run from the project root directory.
 
 import sys
 from pathlib import Path
+import shutil
 
 # Add the project root to the path so we can import from server
 project_root = Path(__file__).resolve().parent.parent
@@ -31,7 +32,11 @@ def main() -> None:
     if len(sys.argv) < 2:
         print("Usage: python scripts/validate_pdf.py <file_path>", file=sys.stderr)
         sys.exit(1)
-
+        
+    # Re-create index on every run
+    shutil.rmtree("data/test_index", ignore_errors=True)                                                                            
+    shutil.rmtree("data/test_docs", ignore_errors=True) 
+    
     print(sys.argv[1])
     process_file(sys.argv[1])
 

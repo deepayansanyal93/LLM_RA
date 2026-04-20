@@ -24,7 +24,11 @@ class Generator:
         if self.settings.generation_model is not None:
             self.model = self.settings.generation_model
         else:
-            raise RuntimeError("generation_model must be set in config for generation to work")
+            listed = self.client.models.list()
+            if not listed.data:
+                raise RuntimeError("embeddings API returned no models; set embedding_model in config")
+            self.model = listed.data[0].id
+            # raise RuntimeError("generation_model must be set in config for generation to work")
 
     def generate(self, query: str, context_chunks: list[dict]) -> str:
         retrieved_context = "\n\n".join(chunk["text"] for chunk in context_chunks)

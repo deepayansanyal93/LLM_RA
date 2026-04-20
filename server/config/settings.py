@@ -154,11 +154,11 @@ def resolve_generator_settings(
     Raises:
         ValueError: If the config is invalid or required fields are missing.
     """
-    key, url, api_key, profile = _load_profile(model_type, config_path)
-    gen_model = _normalize_model_str(profile.get("generation_model"), "generation_model", key)
+    # key, url, api_key, profile = _load_profile(model_type, config_path)
+    # gen_model = profile.get("generation_model")
 
     return GeneratorSettings(
-        base_url=url,
-        api_key=api_key,
-        generation_model=gen_model,
+        base_url="http://localhost:8001/v1",
+        api_key="EMPTY",
+        generation_model=None,
     )
