@@ -2,6 +2,7 @@ plans/
 test_files/
 logs/
 tmp/
+data/
 
 # macOS
 .DS_Store
