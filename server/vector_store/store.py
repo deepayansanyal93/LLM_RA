@@ -1,5 +1,7 @@
+from __future__ import annotations
 
 import pickle
+from collections.abc import Callable
 from pathlib import Path
 
 import faiss
@@ -21,8 +23,15 @@ class VectorStore:
         dimension (int): The dimensionality of the vectors in the FAISS index.
         # TODO: consider sharding the index and documents for scalability
     """
-    def __init__(self, index_path: Path, doc_path: Path, dimension: int=128) -> None:
-        
+    def __init__(
+        self,
+        index_path: Path,
+        doc_path: Path,
+        dimension: int = 128,
+        *,
+        on_after_add: Callable[[], None] | None = None,
+    ) -> None:
+        self._on_after_add = on_after_add
         self.doc_path = doc_path
         self.documents = {}
         # Create the document directory if it doesn't exist, otherwise load existing docstore
@@ -76,6 +85,8 @@ class VectorStore:
                 faiss_id = start_id + i
                 self.documents[faiss_id] = {"text": doc, "metadata": meta}
                 self.index.add(embedding.reshape(1, -1))
+            if self._on_after_add is not None:
+                self._on_after_add()
         except Exception as e:
             raise RuntimeError(f"Failed to add documents and/or embeddings to the index: {e}")
 

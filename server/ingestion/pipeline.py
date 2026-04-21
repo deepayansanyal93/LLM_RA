@@ -61,10 +61,14 @@ def process_file(
 
     logger.info("Validation passed: %s", path_str)
 
+    # Text extraction: PyMuPDF layout blocks (text, page_number, bbox) per page.
     blocks = BasicTextExtractor().extract(path_str)
     metadata = [{"page_number": block["page_number"]} for block in blocks]
+
+    # Chunking: turn blocks into strings sized for the embedding model (see chunks.py).
     queries = basic_chunker(blocks)
 
+    # Embedding generation: batch API calls via embedder for all chunk strings.
     try:
         embeddings = embedder.embed(queries)
     except Exception:
@@ -73,6 +77,7 @@ def process_file(
 
     logger.info("Embeddings shape %s for %s", embeddings.shape, path_str)
 
+    # Persist vectors and parallel doc metadata to the FAISS index and docstore.
     vector_store.add(documents=queries, embeddings=embeddings, metadata=metadata)
     vector_store.save()
     logger.info("Stored %s chunks in vector store for %s", len(queries), path_str)

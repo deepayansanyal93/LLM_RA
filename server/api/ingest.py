@@ -2,6 +2,8 @@
 PDF upload ingestion endpoint.
 
 POST /upload — multipart field ``file`` (single PDF). Maximum body size per upload: 5 MiB.
+After the file is stored under ``tmp/files/``, the ingestion pipeline runs on the shared
+vector store (validate → extract → chunk → embed → index).
 """
 
 from __future__ import annotations
@@ -14,6 +16,9 @@ from typing import Annotated
 from fastapi import APIRouter, File, HTTPException, UploadFile
 
 from pydantic import BaseModel, Field
+
+from server.api.deps import EmbedderDep, VectorStoreDep, VectorStoreLockDep
+from server.ingestion.pipeline import process_file
 
 logger = logging.getLogger(__name__)
 
@@ -47,11 +52,11 @@ class UploadSuccessResponse(BaseModel):
     size_bytes: int = Field(description="Size of the accepted file in bytes")
     chunks: int | None = Field(
         default=None,
-        description="Number of text segments sent to embedding (set when pipeline runs)",
+        description="Number of chunk strings indexed after successful ingestion",
     )
     embedding_dim: int | None = Field(
         default=None,
-        description="Embedding vector dimension (set when pipeline runs)",
+        description="Embedding vector dimension when ingestion completed successfully",
     )
 
 
@@ -100,16 +105,20 @@ async def _read_body_with_limit(upload: UploadFile, max_bytes: int) -> bytes:
         f"Maximum upload size is {MAX_UPLOAD_BYTES // (1024 * 1024)} MiB per request."
     ),
     responses={
+        400: {"description": "Empty file, or saved file failed PDF validation"},
         413: {"description": "File larger than 5 MiB"},
         422: {"description": "Missing or invalid multipart payload"},
+        502: {"description": "Embedding or indexing failed"},
     },
 )
-async def upload_pdf(file: Annotated[UploadFile, File(description="PDF file to ingest")]) -> UploadSuccessResponse:
+async def upload_pdf(
+    file: Annotated[UploadFile, File(description="PDF file to ingest")],
+    embedder: EmbedderDep,
+    vector_store: VectorStoreDep,
+    vector_store_lock: VectorStoreLockDep,
+) -> UploadSuccessResponse:
     """
-    Accept a single PDF upload, enforce size limit, return contract fields.
-
-    Pipeline execution (chunks / embeddings) will populate ``chunks`` and
-    ``embedding_dim`` in a follow-up change.
+    Accept a single PDF upload, save it, run ``process_file`` on the shared store, return counts.
     """
     raw = await _read_body_with_limit(file, MAX_UPLOAD_BYTES)
     name = file.filename or "upload.pdf"
@@ -141,9 +150,31 @@ async def upload_pdf(file: Annotated[UploadFile, File(description="PDF file to i
 
     logger.info("Accepted upload name=%s size=%s stored=%s", name, len(raw), dest)
 
+    async with vector_store_lock:
+        try:
+            ingest_result = process_file(dest, embedder, vector_store)
+        except Exception:
+            logger.exception("Ingestion failed for stored file %s", dest)
+            raise HTTPException(
+                status_code=502,
+                detail=ErrorDetail(
+                    code="ingestion_failed",
+                    message="Embedding or indexing failed; see server logs for details.",
+                ).model_dump(),
+            ) from None
+
+    if not ingest_result.ok:
+        raise HTTPException(
+            status_code=400,
+            detail=ErrorDetail(
+                code="invalid_pdf",
+                message="File was saved but is not a valid PDF for ingestion (validation failed).",
+            ).model_dump(),
+        )
+
     return UploadSuccessResponse(
         filename=name,
         size_bytes=len(raw),
-        chunks=None,
-        embedding_dim=None,
+        chunks=ingest_result.chunks_stored,
+        embedding_dim=embedder.dim,
     )
