@@ -1,91 +1,96 @@
 """
-Ingestion orchestration for a single PDF file.
+Ingestion and query orchestration.
 
-Flow (in order):
-  1. Validate path and PDF header (validation.py).
-  2. Extract layout text blocks with PyMuPDF (text_extractor.BasicTextExtractor).
-  3. Turn blocks into strings suitable for the embedding model (chunks.basic_chunker).
-  4. Request embeddings from the configured backend (extract_embeddings).
+``process_file`` runs the PDF path through validation, layout extraction, chunking,
+embedding, and persistence on a caller-supplied vector store.
 
-This module is the single entry point for “one file in → embeddings out” batch logic.
-Callers include the CLI (scripts/validate_pdf.py) and future services.
+``process_query`` runs RAG-style answering using a **pre-constructed** ``Retriever``
+(so the same instance can be reused across requests) and a ``Generator``.
 """
 
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 
 from server.ingestion.chunks import basic_chunker
 from server.ingestion.text_extractor import BasicTextExtractor
 from server.ingestion.validation import PDFValidationError, validate_pdf_file
-from server.models import Embedder
-from server.models import Retriever
-from server.models import Generator
+from server.models import Embedder, Generator, Retriever
 from server.vector_store import VectorStore
 
-# Logger name becomes "server.ingestion.pipeline" — under the "server" tree so it
-# inherits DEBUG from logging_config (root alone would be WARNING-only for libraries).
 logger = logging.getLogger(__name__)
 
 
-def process_file(file_path: str) -> None:
-    """
-    Run the full ingestion path for one file: validate, extract blocks, chunk, embed.
+@dataclass(frozen=True)
+class IngestResult:
+    """Outcome of ``process_file`` for one path."""
 
-    On validation failure: logs and returns (no exception) so one bad path does not
-    abort a batch caller that loops over many files. Embedding errors are logged then
-    re-raised so the caller can still treat API failures as fatal if desired.
+    ok: bool
+    """False when validation failed before any embedding work."""
+    chunks_stored: int
+    """Number of chunk strings written to the vector store (0 if not ok)."""
+
+
+@dataclass(frozen=True)
+class QueryResult:
+    """Outcome of ``process_query`` for one user question."""
+
+    answer: str
+    retrieval_results: list[dict]
+
+
+def process_file(
+    file_path: str | Path,
+    embedder: Embedder,
+    vector_store: VectorStore,
+) -> IngestResult:
     """
-    # validate_pdf_file raises PDFValidationError for bad paths, wrong extension, or
-    # missing %PDF header. We catch here so ingestion can stop cleanly for this file.
+    Ingest one PDF: validate, extract blocks, chunk, embed, add to ``vector_store``, save.
+
+    On validation failure: logs, returns ``IngestResult(ok=False, chunks_stored=0)``.
+    Embedding failures are logged and re-raised.
+    """
+    path_str = str(file_path)
     try:
-        validate_pdf_file(file_path)
+        validate_pdf_file(path_str)
     except PDFValidationError as e:
-        logger.error("Validation failed for %s: %s", file_path, e)
-        return
+        logger.error("Validation failed for %s: %s", path_str, e)
+        return IngestResult(ok=False, chunks_stored=0)
 
-    logger.info("Validation passed: %s", file_path)
+    logger.info("Validation passed: %s", path_str)
 
-    # Stage 1: PyMuPDF block dicts (text, page_number, bbox).
-    blocks = BasicTextExtractor().extract(file_path)
+    blocks = BasicTextExtractor().extract(path_str)
     metadata = [{"page_number": block["page_number"]} for block in blocks]
-
-    # Stage 2: strings passed to the embedding API (chunking strategy lives in chunks.py).
     queries = basic_chunker(blocks)
 
-    # Network or API errors from the embedding backend: full traceback in the log file
-    # (logger.exception), then re-raise so scripts can exit non-zero or HTTP layer can 5xx.
     try:
-        embedder = Embedder()
         embeddings = embedder.embed(queries)
     except Exception:
-        logger.exception("Embedding extraction failed for %s", file_path)
+        logger.exception("Embedding extraction failed for %s", path_str)
         raise
 
-    logger.info("Embeddings shape %s for %s", embeddings.shape, file_path)
-    
-    vector_store = VectorStore(
-            index_path=Path("data/test_index"), 
-            doc_path=Path("data/test_docs"),
-            dimension=embedder.dim
-        )
+    logger.info("Embeddings shape %s for %s", embeddings.shape, path_str)
+
     vector_store.add(documents=queries, embeddings=embeddings, metadata=metadata)
     vector_store.save()
-    print(f"Stored {len(queries)} documents and embeddings in the vector store.")
+    logger.info("Stored %s chunks in vector store for %s", len(queries), path_str)
 
-    # Retrieve the top 3 most relevant documents for a test query
-    retriever = Retriever(vector_store=vector_store, embedder=embedder)
-    test_query = "What is the main topic of the document?"
-    results = retriever.retrieve(test_query, top_k=3)
-    print(f"Top 3 results for query: '{test_query}'")
-    for i, result in enumerate(results):
-        print(f"Result {i+1}:")
-        print(f"Text: {result['text']}")
-        print(f"Metadata: {result['metadata']}")
-        print()
+    return IngestResult(ok=True, chunks_stored=len(queries))
 
-    # Instantiate the generator and generate a response based on the retrieved documents
-    generator = Generator()
-    response = generator.generate(test_query, results)
-    print(f"Generated response: {response}")
+
+def process_query(
+    query: str,
+    retriever: Retriever,
+    generator: Generator,
+    *,
+    top_k: int = 5,
+) -> QueryResult:
+    """
+    Retrieve context with ``retriever`` (reuse the same instance across calls),
+    then generate an answer with ``generator``.
+    """
+    results = retriever.retrieve(query, top_k=top_k)
+    answer = generator.generate(query, results)
+    return QueryResult(answer=answer, retrieval_results=results)
