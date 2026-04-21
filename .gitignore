@@ -1,6 +1,7 @@
 plans/
 test_files/
 logs/
+data/
 
 # macOS
 .DS_Store
